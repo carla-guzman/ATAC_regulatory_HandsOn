@@ -1,0 +1,163 @@
+########################################
+
+# Distal regulatory activity HANDS-ON 
+
+########################################
+
+# Create project folder and structure
+mkdir -p regulatory_elements
+cd regulatory_elements
+
+mkdir -p data/bigBed.files
+mkdir -p data/bed.files
+mkdir -p annotation
+mkdir -p analyses
+mkdir -p bin
+
+# 1. Copy annotation files
+cp ../ChIP-seq/annotation/gencode.v24.protein.coding.gene.body.bed annotation/
+cp ../ChIP-seq/annotation/gencode.v24.protein.coding.non.redundant.TSS.bed annotation/
+
+# 2. Copy ATAC-seq peaks outside genes
+cp ../ATAC-seq/analyses/peaks.analysis/*.outside.genes.bed data/bed.files/
+
+# 3. Identify H3K27ac and H3K4me1 peak files
+grep -F H3K27ac ../ChIP-seq/metadata.tsv | 
+grep -F “bigBed_narrowPeak” | 
+grep -F “GRCh38”
+
+grep -F H3K4me1 ../ChIP-seq/metadata.tsv | 
+grep -F “bigBed_narrowPeak” | 
+grep -F “GRCh38”
+
+# 4. Download histone mark peak files
+wget -P data/bigBed.files 
+https://www.encodeproject.org/files/ENCFF977LBD/@@download/ENCFF977LBD.bigBed
+
+wget -P data/bigBed.files 
+https://www.encodeproject.org/files/ENCFF142LKY/@@download/ENCFF142LKY.bigBed
+
+# 5. Convert bigBed to BED
+bigBedToBed 
+data/bigBed.files/ENCFF977LBD.bigBed 
+data/bed.files/H3K27ac.bed
+
+bigBedToBed 
+data/bigBed.files/ENCFF142LKY.bigBed 
+data/bed.files/H3K4me1.bed
+
+# 6. Candidate enhancer catalogue based on histone marks
+bedtools intersect 
+  -a data/bed.files/H3K27ac.bed 
+  -b data/bed.files/H3K4me1.bed \
+> analyses/enhancers_H3K27ac_H3K4me1.bed
+
+# 7. H3K27ac peaks overlapping promoters
+bedtools intersect -u 
+  -a data/bed.files/H3K27ac.bed 
+  -b annotation/gencode.v24.protein.coding.non.redundant.TSS.bed \
+> analyses/promoter_H3K27ac.bed
+
+# 8. Merge ATAC-seq peaks outside genes
+cat ../ATAC-seq/analyses/peaks.analysis/*.outside.genes.bed \
+> ../ATAC-seq/ATAC.outside.genes.merged.bed
+
+# 9. ATAC peaks overlapping H3K27ac
+bedtools intersect -u 
+  -a ../ATAC-seq/ATAC.outside.genes.merged.bed 
+  -b data/bed.files/H3K27ac.bed \
+> analyses/ATAC_H3K27ac.bed
+
+# 10. ATAC peaks overlapping H3K4me1
+bedtools intersect -u 
+  -a ../ATAC-seq/ATAC.outside.genes.merged.bed 
+  -b data/bed.files/H3K4me1.bed \
+> analyses/ATAC_H3K4me1.bed
+
+# 11. Final active distal regulatory elements
+bedtools intersect -u 
+  -a analyses/ATAC_H3K27ac.bed 
+  -b data/bed.files/H3K4me1.bed \
+> analyses/ATAC_enhancers_final.bed
+
+# Count candidate distal regulatory elements
+wc -l analyses/ATAC_enhancers_final.bed
+
+# 12. Summary counts
+wc -l analyses/*.bed > analyses/summary_counts.txt
+
+# 13. Regulatory element start coordinates (chromosome 1)
+awk ‘BEGIN{OFS=”\t”}{
+peak=$1”:”$2”-”$3;
+print peak,$2
+}’ analyses/ATAC_enhancers_final.bed \
+> analyses/regulatory.elements.starts.tsv
+
+# 14. Gene start coordinates
+awk ‘BEGIN{FS=OFS=”\t”}{
+if ($6==”+”){start=$2}
+else {start=$3}
+print $7,start
+}’ annotation/gencode.v24.protein.coding.non.redundant.TSS.bed \
+>  analyses/gene.starts.tsv
+
+# 15. Test distance script
+python ../bin/get.distance.py 
+–input analyses/gene.starts.tsv 
+–start 980000
+
+# 16. Closest gene for each regulatory element
+while read element start; do
+python ../bin/get.distance.py 
+–input analyses/gene.starts.tsv 
+–start “$start”
+done < analyses/regulatory.elements.starts.tsv \
+> analyses/regulatoryElements.genes.distances.tsv
+
+# Check results
+head analyses/regulatoryElements.genes.distances.tsv
+wc -l analyses/regulatoryElements.genes.distances.tsv
+
+# 17. Distance statistics and histogram
+R
+
+d <- read.table(“analyses/regulatoryElements.genes.distances.tsv”)
+dist <- d[,3]
+
+mean_val <- mean(dist)
+median_val <- median(dist)
+
+mean_val
+median_val
+
+png(“analyses/distance_histogram_log_final.png”,
+width = 1200,
+height = 900)
+
+hist(log10(dist + 1),
+breaks = 60,
+col = “grey80”,
+border = “grey30”,
+main = “Distance to closest gene (log10 scale)”,
+xlab = “log10(distance to closest gene + 1)”,
+ylab = “Frequency”)
+
+abline(v = log10(mean_val + 1),
+col = “red”,
+lwd = 3)
+
+abline(v = log10(median_val + 1),
+col = “blue”,
+lwd = 3)
+
+legend(“topright”,
+legend = c(
+paste0(“Mean = “, round(mean_val,1), “ bp”),
+paste0(“Median = “, round(median_val,1), “ bp”)
+),
+col = c(“red”,“blue”),
+lwd = 3,
+bty = “n”)
+
+dev.off()
+q()

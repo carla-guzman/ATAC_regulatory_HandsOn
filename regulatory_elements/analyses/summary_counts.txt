@@ -1,0 +1,7 @@
+   45671 analyses/ATAC_H3K27ac.bed
+   44148 analyses/ATAC_H3K4me1.bed
+   31722 analyses/ATAC_enhancers_final.bed
+   69315 analyses/enhancers_H3K27ac_H3K4me1.bed
+   32554 analyses/enhancers_active.bed
+   21506 analyses/promoter_H3K27ac.bed
+  244916 total

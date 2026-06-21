@@ -1,0 +1,11 @@
+.DS_Store
+*.swp
+.Rhistory
+*.fastq.gz
+*.bam
+*.sam
+*.cram
+.nextflow/
+.nextflow.log*
+.nextflow.pid
+work/

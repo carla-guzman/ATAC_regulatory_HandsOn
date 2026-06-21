@@ -1,0 +1,122 @@
+
+########################################
+# ATAC-seq HANDS-ON
+########################################
+
+# Create folder structure
+mkdir -p data/bigBed.files
+mkdir -p data/bed.files
+mkdir -p annotation
+mkdir -p analyses/peaks.analysis
+
+# 1. Download metadata
+../bin/download.metadata.sh "https://www.encodeproject.org/metadata/?replicates.library.biosample.donor.uuid=d370683e-81e7-473f-8475-7716d027849b&status=released&status=submitted&status=in+progress&control_type%21=%2A&assembly=GRCh38&biosample_ontology.term_name=sigmoid+colon&biosample_ontology.term_name=stomach&assay_slims=DNA+accessibility&assay_title=ATAC-seq&type=Experiment"
+
+# 2. Inspect metadata
+head -1 metadata.tsv
+wc -l metadata.tsv
+cut -f11 metadata.tsv | sort | uniq -c
+
+# 3. Extract ATAC-seq peak files
+awk 'BEGIN{FS=OFS="\t"} 
+$2=="bigBed_narrowPeak" && $8=="ATAC-seq" {
+print $1, $11, $7
+}' metadata.tsv > analyses/bigBed.peaks.ids.txt
+
+# 4. Download bigBed files
+cut -f1 analyses/bigBed.peaks.ids.txt | while read file; do
+  wget -P data/bigBed.files \
+  "https://www.encodeproject.org/files/${file}/@@download/${file}.bigBed"
+done
+
+# 5. MD5 verification
+../bin/selectRows.sh \
+<(cut -f1 analyses/bigBed.peaks.ids.txt) \
+metadata.tsv | cut -f1,46 > md5.txt
+
+cat md5.txt | while read file md5; do
+  md5sum data/bigBed.files/${file}.bigBed | \
+  awk -v file="$file" -v md5="$md5" \
+  'BEGIN{OFS="\t"}{print file, md5, $1}'
+done > md5.check.txt
+
+awk '$2!=$3' md5.check.txt
+
+# 6. Convert bigBed to BED
+while read file tissue donor; do
+  bigBedToBed  data/bigBed.files/${file}.bigBed \
+                           data/bed.files/${file}.bed
+done < analyses/bigBed.peaks.ids.txt
+
+# 7. Annotation files
+cp ../ChIP-seq/annotation/gencode.v24.protein.coding.gene.body.bed annotation/
+cp ../ChIP-seq/annotation/gencode.v24.protein.coding.non.redundant.TSS.bed annotation/
+
+# 8. Peaks overlapping promoters 
+while read file tissue donor; do
+  bedtools intersect \
+    -a annotation/gencode.v24.protein.coding.non.redundant.TSS.bed \
+    -b data/bed.files/${file}.bed \
+    -u | cut -f7 | sort -u \
+  > analyses/peaks.analysis/genes.with.promoter.peaks.${tissue}.txt
+done < analyses/bigBed.peaks.ids.txt
+
+# Count genes with promoter peaks
+wc -l analyses/peaks.analysis/genes.with.promoter.peaks.stomach.txt
+wc -l analyses/peaks.analysis/genes.with.promoter.peaks.sigmoid_colon.txt
+
+# 9. Peaks overlapping gene bodies 
+while read file tissue donor; do
+  bedtools intersect \
+    -a annotation/gencode.v24.protein.coding.gene.body.bed \
+    -b data/bed.files/${file}.bed \
+    -u | cut -f7 | sort -u \
+  > analyses/peaks.analysis/genes.with.genebody.peaks.${tissue}.txt
+done < analyses/bigBed.peaks.ids.txt
+
+# Count genes with gene body peaks
+wc -l analyses/peaks.analysis/genes.with.gene.body.peaks.stomach.txt
+wc -l analyses/peaks.analysis/genes.with.gene.body.peaks.sigmoid_colon.txt
+
+# 10. Peaks outside gene coordinates
+for file in ENCFF469LGT ENCFF287UHP ENCFF139JJY ENCFF762IFP; do
+  bedtools intersect -v  \
+    -a data/bed.files/${file}.bed \
+    -b annotation/gencode.v24.protein.coding.gene.body.bed \
+  | wc -l > analyses/peaks.analysis/${file}.outside.genes.txt
+done
+
+# 11. Summary table
+echo -e "sample\ttissue\tpromoter\tgene_body\toutside" \
+> analyses/peaks.analysis/summary.tsv
+
+while read file tissue donor; do
+  promoter=$(wc -l < analyses/peaks.analysis/genes.with.promoter.peaks.${tissue}.txt)
+  gene_body=$(wc -l < analyses/peaks.analysis/genes.with.gene.body.peaks.${tissue}.txt)
+  outside=$(cat analyses/peaks.analysis/${file}.outside.genes.txt)
+
+    echo -e "${file}\t${tissue}\t${promoter}\t${gene_body}\t${outside}"
+  done < analyses/bigBed.peaks.ids.txt \
+>> analyses/peaks.analysis/summary.tsv
+
+# 12. Plot
+Rscript - << 'EOF'
+df <- read.table("analyses/peaks.analysis/summary.tsv", header=TRUE, sep="\t")
+
+df_long <- rbind(
+  data.frame(sample=df$sample, tissue=df$tissue, region="promoter", count=df$promoter),
+  data.frame(sample=df$sample, tissue=df$tissue, region="gene_body", count=df$gene_body),
+  data.frame(sample=df$sample, tissue=df$tissue, region="outside", count=df$outside)
+)
+
+library(ggplot2)
+
+ggplot(df_long, aes(x=sample, y=count, fill=region)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~tissue, scales="free_x") +
+  theme_bw() +
+  labs(title="ATAC-seq peak distribution",
+       y="Number of peaks",
+       x="Sample")
+
+ggsave("analyses/peaks.analysis/ATAC_peaks_distribution.pdf", width=7, height=4)
